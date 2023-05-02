@@ -1,11 +1,11 @@
 mod models;
+mod handlers;
+
+use crate::models::TodoItem;
 use actix_web::{web, App, HttpServer, HttpResponse, Responder};
 use std::sync::Mutex;
-use crate::models::TodoItem;
+use handlers::{create_item, delete_item, read_items, update_item};
 
-async fn index() -> impl Responder {
-    HttpResponse::Ok().body("Hello, Rusticate!")
-}
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
@@ -25,46 +25,6 @@ async fn main() -> std::io::Result<()> {
     .await
 }
 
-// Create
-async fn create_item(item: web::Json<TodoItem>, todo_items: web::Data<Mutex<Vec<TodoItem>>>) -> impl Responder {
-    let mut items = todo_items.lock().unwrap();
-    items.push(item.into_inner());
-    HttpResponse::Created().finish()
-}
-
-// Read
-async fn read_items(todo_items: web::Data<Mutex<Vec<TodoItem>>>) -> impl Responder {
-    let items = todo_items.lock().unwrap();
-    let json = serde_json::to_string(&*items).unwrap();
-    HttpResponse::Ok().body(json)
-}
-
-// Update
-async fn update_item(item_id: web::Path<u64>, item: web::Json<TodoItem>, todo_items: web::Data<Mutex<Vec<TodoItem>>>) -> impl Responder {
-    let mut items = todo_items.lock().unwrap();
-    let item_id = item_id.into_inner();
-
-    for todo_item in items.iter_mut() {
-        if todo_item.id == item_id {
-            *todo_item = item.into_inner();
-            return HttpResponse::Ok().finish();
-        }
-    }
-
-    HttpResponse::NotFound().finish()
-}
-
-// Delete
-async fn delete_item(item_id: web::Path<u64>, todo_items: web::Data<Mutex<Vec<TodoItem>>>) -> impl Responder {
-    let mut items = todo_items.lock().unwrap();
-    let item_id = item_id.into_inner();
-
-    let original_len = items.len();
-    items.retain(|todo_item| todo_item.id != item_id);
-
-    if original_len == items.len() {
-        HttpResponse::NotFound().finish()
-    } else {
-        HttpResponse::NoContent().finish()
-    }
+async fn index() -> impl Responder {
+    HttpResponse::Ok().body("Hello, Rusticate!")
 }
