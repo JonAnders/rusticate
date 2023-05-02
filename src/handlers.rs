@@ -9,6 +9,7 @@ use crate::error::{TodoApiError, TodoApiErrorKind};
 pub struct TodoItem {
     pub id: u64,
     pub title: String,
+    pub description: String,
     pub completed: bool,
 }
 
