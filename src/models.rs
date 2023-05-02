@@ -1,3 +1,4 @@
+// Represents a to-do list item with its details
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct TodoItem {
     pub id: u64,

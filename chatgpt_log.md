@@ -732,3 +732,49 @@ pub struct TodoItem {
 ```
 
 Now, when you run `cargo run`, you should no longer see any warnings.
+
+## Jon Anders
+> For the second point of the review, I have already removed the unused import.  
+> What comments should we add?
+
+## ChatGPT
+I'm glad you've already removed the unused import. For adding comments to improve code readability, I suggest the following:
+
+1. In `models.rs`, add a comment to describe the purpose of the `TodoItem` struct:
+
+```rust
+// Represents a to-do list item with its details
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct TodoItem {
+    pub id: u64,
+    pub title: String,
+    pub description: String,
+    pub completed: bool,
+}
+```
+
+2. In `handlers.rs`, add comments for each CRUD handler to describe its functionality:
+
+```rust
+// Create a new to-do item and add it to the shared state
+pub async fn create_item(item: web::Json<TodoItem>, todo_items: web::Data<Mutex<Vec<TodoItem>>>) -> impl Responder {
+    // ...
+}
+
+// Retrieve all to-do items from the shared state
+pub async fn read_items(todo_items: web::Data<Mutex<Vec<TodoItem>>>) -> impl Responder {
+    // ...
+}
+
+// Update an existing to-do item in the shared state by its ID
+pub async fn update_item(item_id: web::Path<u64>, item: web::Json<TodoItem>, todo_items: web::Data<Mutex<Vec<TodoItem>>>) -> impl Responder {
+    // ...
+}
+
+// Delete a to-do item from the shared state by its ID
+pub async fn delete_item(item_id: web::Path<u64>, todo_items: web::Data<Mutex<Vec<TodoItem>>>) -> impl Responder {
+    // ...
+}
+```
+
+These comments provide a brief explanation of the purpose of each struct and function, making it easier for others (or yourself) to understand the code when revisiting the project later.

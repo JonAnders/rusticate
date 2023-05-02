@@ -2,20 +2,20 @@ use crate::models::TodoItem;
 use actix_web::{web, HttpResponse, Responder};
 use std::sync::Mutex;
 
-// Create
+// Create a new to-do item and add it to the shared state
 pub async fn create_item(item: web::Json<TodoItem>, todo_items: web::Data<Mutex<Vec<TodoItem>>>) -> impl Responder {
     let mut items = todo_items.lock().unwrap();
     items.push(item.into_inner());
     HttpResponse::Created().finish()
 }
 
-// Read
+// Retrieve all to-do items from the shared state
 pub async fn read_items(todo_items: web::Data<Mutex<Vec<TodoItem>>>) -> impl Responder {
     let items = todo_items.lock().unwrap();
     web::Json(items.clone())
 }
 
-// Update
+// Update an existing to-do item in the shared state by its ID
 pub async fn update_item(item_id: web::Path<u64>, item: web::Json<TodoItem>, todo_items: web::Data<Mutex<Vec<TodoItem>>>) -> impl Responder {
     let mut items = todo_items.lock().unwrap();
     let item_id = item_id.into_inner();
@@ -30,7 +30,7 @@ pub async fn update_item(item_id: web::Path<u64>, item: web::Json<TodoItem>, tod
     HttpResponse::NotFound().finish()
 }
 
-// Delete
+// Delete a to-do item from the shared state by its ID
 pub async fn delete_item(item_id: web::Path<u64>, todo_items: web::Data<Mutex<Vec<TodoItem>>>) -> impl Responder {
     let mut items = todo_items.lock().unwrap();
     let item_id = item_id.into_inner();
