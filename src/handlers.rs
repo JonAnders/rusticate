@@ -1,17 +1,9 @@
 use actix_web::{web, HttpResponse, Responder, Error};
 use std::sync::Mutex;
 use log::{error, info};
-use serde::{Deserialize, Serialize};
 use crate::error::{TodoApiError, TodoApiErrorKind};
+use crate::models::TodoItem;
 
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct TodoItem {
-    pub id: u64,
-    pub title: String,
-    pub description: String,
-    pub completed: bool,
-}
 
 // Create a new to-do item and add it to the shared state
 pub async fn create_item(

@@ -4,7 +4,8 @@ mod error;
 
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};
 use std::sync::Mutex;
-use crate::handlers::{create_item, delete_item, read_items, TodoItem, update_item};
+use crate::handlers::{create_item, delete_item, read_items, update_item};
+use crate::models::TodoItem;
 
 
 // Initialize logger
