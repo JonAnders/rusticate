@@ -1,14 +1,23 @@
 mod models;
 mod handlers;
+mod error;
 
-use crate::models::TodoItem;
-use actix_web::{web, App, HttpServer, HttpResponse, Responder};
+use actix_web::{web, App, HttpResponse, HttpServer, Responder};
 use std::sync::Mutex;
-use handlers::{create_item, delete_item, read_items, update_item};
+use crate::handlers::{create_item, delete_item, read_items, TodoItem, update_item};
 
+
+// Initialize logger
+fn init_logger() {
+    env_logger::Builder::new()
+        .filter(None, log::LevelFilter::Info)
+        .init();
+}
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
+    init_logger();
+
     let todo_items = web::Data::new(Mutex::new(Vec::new() as Vec<TodoItem>));
 
     HttpServer::new(move || {
