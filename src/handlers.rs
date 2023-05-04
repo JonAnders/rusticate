@@ -1,70 +1,56 @@
-use actix_web::{web, HttpResponse, Responder, Error};
-use std::sync::Mutex;
-use log::{error, info};
-use crate::error::{TodoApiError, TodoApiErrorKind};
+use crate::error::TodoApiError;
 use crate::models::TodoItem;
+use crate::db;
+use actix_web::{web, HttpResponse, Responder};
+use diesel::result::Error as DieselError;
 
-
-// Create a new to-do item and add it to the shared state
+// Create a new to-do item and add it to the database
 pub async fn create_item(
     item: web::Json<TodoItem>,
-    todo_items: web::Data<Mutex<Vec<TodoItem>>>,
+    pool: web::Data<db::Pool>,
 ) -> Result<impl Responder, TodoApiError> {
-    info!("create_item called");
-    let mut items = todo_items.lock().map_err(|e| {
-        let error_message = format!("Failed to lock Mutex: {}", e);
-        error!("{}", error_message);
-        TodoApiError { kind: TodoApiErrorKind::MutexLockError }
-    })?;
-    items.push(item.into_inner());
+    let mut connection = pool.get().map_err(TodoApiError::from)?;
+
+    let new_item = item.into_inner();
+    let _ = db::create_item(&mut connection, &new_item)?;
+
     Ok(HttpResponse::Created().finish())
 }
 
-// Retrieve all to-do items from the shared state
-pub async fn read_items(
-    todo_items: web::Data<Mutex<Vec<TodoItem>>>,
-) -> Result<HttpResponse, TodoApiError> {
-    info!("get_items called");
-    let items = todo_items
-        .lock()
-        .map_err(|e| {
-            let error_message = format!("Failed to lock Mutex: {}", e);
-            error!("{}", error_message);
-            TodoApiError { kind: TodoApiErrorKind::MutexLockError }
-        })?;
-    info!("Returning items: {:?}", items);
-    Ok(HttpResponse::Ok().json(items.clone()))
+// Retrieve all to-do items from the database
+pub async fn read_items(pool: web::Data<db::Pool>) -> Result<HttpResponse, TodoApiError> {
+    let mut connection = pool.get().map_err(TodoApiError::from)?;
+    let items = db::read_items(&mut connection)?;
+
+    Ok(HttpResponse::Ok().json(items))
 }
 
-// Update an existing to-do item in the shared state by its ID
-pub async fn update_item(item_id: web::Path<u64>, item: web::Json<TodoItem>, todo_items: web::Data<Mutex<Vec<TodoItem>>>) -> Result<impl Responder, Error> {
-    info!("update_item called");
-    let mut items = todo_items.lock().map_err(|e| {
-        let error_message = format!("Failed to lock Mutex: {}", e);
-        error!("{}", error_message);
-        TodoApiError { kind: TodoApiErrorKind::MutexLockError }
-    })?;
-    for i in items.iter_mut() {
-        if i.id == *item_id {
-            *i = item.into_inner();
-            return Ok(HttpResponse::Ok().finish());
-        }
+// Update an existing to-do item in the database by its ID
+pub async fn update_item(
+    item_id: web::Path<i32>,
+    item: web::Json<TodoItem>,
+    pool: web::Data<db::Pool>,
+) -> Result<impl Responder, TodoApiError> {
+    let mut connection = pool.get().map_err(TodoApiError::from)?;
+    let updated_item = item.into_inner();
+
+    match db::update_item(&mut connection, *item_id, &updated_item) {
+        Ok(_) => Ok(HttpResponse::Ok().finish()),
+        Err(DieselError::NotFound) => Ok(HttpResponse::NotFound().finish()),
+        Err(_) => Err(TodoApiError::from("Internal server error")),
     }
-    Ok(HttpResponse::NotFound().finish())
 }
 
-// Delete a to-do item from the shared state by its ID
-pub async fn delete_item(item_id: web::Path<u64>, todo_items: web::Data<Mutex<Vec<TodoItem>>>) -> Result<impl Responder, Error> {
-    info!("delete_item called");
-    let mut items = todo_items.lock().map_err(|e| {
-        let error_message = format!("Failed to lock Mutex: {}", e);
-        error!("{}", error_message);
-        TodoApiError { kind: TodoApiErrorKind::MutexLockError }
-    })?;
-    if let Some(index) = items.iter().position(|i| i.id == *item_id) {
-        items.remove(index);
-        Ok(HttpResponse::NoContent().finish())
-    } else {
-        Ok(HttpResponse::NotFound().finish())
+// Delete a to-do item from the database by its ID
+pub async fn delete_item(
+    item_id: web::Path<i32>,
+    pool: web::Data<db::Pool>,
+) -> Result<impl Responder, TodoApiError> {
+    let mut connection = pool.get().map_err(TodoApiError::from)?;
+
+    match db::delete_item(&mut connection, *item_id) {
+        Ok(_) => Ok(HttpResponse::NoContent().finish()),
+        Err(DieselError::NotFound) => Ok(HttpResponse::NotFound().finish()),
+        Err(_) => Err(TodoApiError::from("Internal server error")),
     }
 }

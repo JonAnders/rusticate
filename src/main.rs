@@ -1,11 +1,13 @@
 mod models;
 mod handlers;
 mod error;
+mod db;
+mod schema;
 
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};
-use std::sync::Mutex;
+use actix_web::middleware::Logger;
+use crate::db::init_pool;
 use crate::handlers::{create_item, delete_item, read_items, update_item};
-use crate::models::TodoItem;
 
 
 // Initialize logger
@@ -19,10 +21,12 @@ fn init_logger() {
 async fn main() -> std::io::Result<()> {
     init_logger();
 
-    let todo_items = web::Data::new(Mutex::new(Vec::new() as Vec<TodoItem>));
+    let database_url = dotenv::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let todo_items = web::Data::new(init_pool(&database_url));
 
     HttpServer::new(move || {
         App::new()
+            .wrap(Logger::default())
             .app_data(todo_items.clone())
             .route("/", web::get().to(index))
             .route("/items", web::post().to(create_item))
