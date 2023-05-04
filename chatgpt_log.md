@@ -4503,7 +4503,7 @@ After making these changes, your code should compile without any errors or warni
 > note: method defined here  
 >     --> C:\Users\amu\.cargo\registry\src\github.com-1ecc6299db9ec823\diesel-2.0.4\src\query_dsl\mod.rs:1497:8  
 >      |  
-> 1497 |     fn load<'query, U>(self, conn: &mut Conn) -> QueryResult<Vec<U>>  
+> 1497 |     fn load<'query, U>(self, conn: &mut Conn) -> QueryResult<Vec<U\>>  
 >      |        ^^^^  
 >   
 > error[E0308]: mismatched types  
