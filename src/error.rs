@@ -74,3 +74,23 @@ impl From<diesel::r2d2::PoolError> for TodoApiError {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use diesel::result::Error as DieselError;
+
+    #[test]
+    fn test_diesel_error_conversion() {
+        let diesel_error = DieselError::RollbackTransaction;
+        let todo_api_error: TodoApiError = diesel_error.into();
+        assert!(matches!(todo_api_error.kind, TodoApiErrorKind::DieselError(_)));
+    }
+
+    #[test]
+    fn test_r2d2_error_conversion() {
+        let r2d2_error = diesel::r2d2::Error::ConnectionError(diesel::ConnectionError::BadConnection("R2D2 error".to_string()));
+        let todo_api_error: TodoApiError = r2d2_error.into();
+        assert!(matches!(todo_api_error.kind, TodoApiErrorKind::R2D2Error(_)));
+    }
+}
