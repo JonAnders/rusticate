@@ -6359,3 +6359,853 @@ Replace the previous test function with this updated one and run `cargo test` ag
 
 ## ChatGPT
 I apologize for the oversight. It seems I made another mistake. It appears that creating a custom `r2d2::PoolError` is not straightforward due to the private constructors. In this case, we can skip testing the conversion from `diesel::r2d2::PoolError` to `TodoApiError`. Testing the other conversion functions should provide enough confidence in the error handling implementation.
+
+## Jon Anders
+> Ok, the other tests are working.  
+> Now write unit tests for `src/handlers.rs` as well.  
+>   
+> For reference, here is the newest version of that file:  
+> use crate::error::TodoApiError;  
+> use crate::models::TodoItem;  
+> use crate::db;  
+> use actix_web::{web, HttpResponse, Responder};  
+> use diesel::result::Error as DieselError;  
+>   
+> // Create a new to-do item and add it to the database  
+> pub async fn create_item(  
+>     item: web::Json<TodoItem>,  
+>     pool: web::Data<db::Pool>,  
+> ) -> Result<impl Responder, TodoApiError> {  
+>     let mut connection = pool.get().map_err(TodoApiError::from)?;  
+>   
+>     let new_item = item.into_inner();  
+>     let _ = db::create_item(&mut connection, &new_item)?;  
+>   
+>     Ok(HttpResponse::Created().finish())  
+> }  
+>   
+> // Retrieve all to-do items from the database  
+> pub async fn read_items(pool: web::Data<db::Pool>) -> Result<HttpResponse, TodoApiError> {  
+>     let mut connection = pool.get().map_err(TodoApiError::from)?;  
+>     let items = db::read_items(&mut connection)?;  
+>   
+>     Ok(HttpResponse::Ok().json(items))  
+> }  
+>   
+> // Update an existing to-do item in the database by its ID  
+> pub async fn update_item(  
+>     item_id: web::Path<i32>,  
+>     item: web::Json<TodoItem>,  
+>     pool: web::Data<db::Pool>,  
+> ) -> Result<impl Responder, TodoApiError> {  
+>     let mut connection = pool.get().map_err(TodoApiError::from)?;  
+>     let updated_item = item.into_inner();  
+>   
+>     match db::update_item(&mut connection, *item_id, &updated_item) {  
+>         Ok(_) => Ok(HttpResponse::Ok().finish()),  
+>         Err(DieselError::NotFound) => Ok(HttpResponse::NotFound().finish()),  
+>         Err(_) => Err(TodoApiError::from("Internal server error")),  
+>     }  
+> }  
+>   
+> // Delete a to-do item from the database by its ID  
+> pub async fn delete_item(  
+>     item_id: web::Path<i32>,  
+>     pool: web::Data<db::Pool>,  
+> ) -> Result<impl Responder, TodoApiError> {  
+>     let mut connection = pool.get().map_err(TodoApiError::from)?;  
+>   
+>     match db::delete_item(&mut connection, *item_id) {  
+>         Ok(_) => Ok(HttpResponse::NoContent().finish()),  
+>         Err(DieselError::NotFound) => Ok(HttpResponse::NotFound().finish()),  
+>         Err(_) => Err(TodoApiError::from("Internal server error")),  
+>     }  
+> }  
+
+## ChatGPT
+To add tests for `src/handlers.rs`, follow these steps:
+
+1. Add the `#[cfg(test)]` module at the end of the `src/handlers.rs` file.
+2. Import the required modules and types.
+3. Create helper functions for setting up test data and running the handlers.
+4. Write tests for each handler function.
+
+Here's an example of how to write tests for `src/handlers.rs`:
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use actix_web::{test, App};
+    use actix_web::http::StatusCode;
+    use crate::models::TodoItem;
+    use crate::db::{self, Pool};
+    use diesel_migrations::{embed_migrations, EmbeddedMigrations, MigrationHarness};
+
+    pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("./migrations");
+
+    fn setup_pool() -> Pool {
+        let pool = db::init_pool("file::memory:?cache=shared");
+        let mut connection = pool.get().unwrap();
+        connection.run_pending_migrations(MIGRATIONS).unwrap();
+        pool
+    }
+
+    async fn test_handler(pool: Pool, request: actix_web::test::TestRequest) -> HttpResponse {
+        let app = test::init_service(
+            App::new()
+                .data(pool.clone())
+                .route("/create", web::post().to(create_item))
+                .route("/read", web::get().to(read_items))
+                .route("/update/{id}", web::put().to(update_item))
+                .route("/delete/{id}", web::delete().to(delete_item)),
+        )
+        .await;
+
+        test::call_service(&app, request.to_request()).await
+    }
+
+    #[actix_rt::test]
+    async fn test_create_item() {
+        let pool = setup_pool();
+        let item = TodoItem {
+            id: 0,
+            title: "Test item".to_string(),
+            description: "Test description".to_string(),
+            completed: false,
+        };
+
+        let request = test::TestRequest::post()
+            .uri("/create")
+            .set_json(&item);
+
+        let response = test_handler(pool, request).await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+    }
+
+    // Add tests for read_items, update_item, and delete_item here
+}
+```
+
+This setup includes a test for the `create_item` handler. You can follow a similar pattern to write tests for the other handler functions (`read_items`, `update_item`, and `delete_item`).
+
+## Jon Anders
+> This looks more like an integration test than a unit test to me. Is it possible to test only the code in handlers.rs in isolation?
+
+## ChatGPT
+You are right; the example provided is closer to an integration test. To write more focused unit tests for the handler functions, you can mock the database interactions and test only the handlers' logic. One way to do this is by using the `mockall` crate.
+
+First, add `mockall` and `mockall_derive` to your `Cargo.toml`:
+
+```toml
+[dev-dependencies]
+mockall = "0.10.2"
+mockall_derive = "0.10.2"
+```
+
+Next, modify `src/handlers.rs` to accept a trait for the database functions instead of a direct `Pool` type. This will allow you to mock the database interactions in your tests.
+
+```rust
+// ...
+
+// Add a new trait for the database operations
+pub trait DbOps {
+    fn create_item(&self, item: &TodoItem) -> Result<usize, TodoApiError>;
+    // Add other function signatures for read_items, update_item, and delete_item
+}
+
+// Implement DbOps for the original Pool type
+impl DbOps for db::Pool {
+    fn create_item(&self, item: &TodoItem) -> Result<usize, TodoApiError> {
+        let mut connection = self.get().map_err(TodoApiError::from)?;
+        db::create_item(&mut connection, &item)
+    }
+    // Implement other functions for read_items, update_item, and delete_item
+}
+
+// Update the handler functions to accept a generic type implementing the DbOps trait
+pub async fn create_item<D: DbOps + Sync + Send>(
+    item: web::Json<TodoItem>,
+    pool: web::Data<D>,
+) -> Result<impl Responder, TodoApiError> {
+    let new_item = item.into_inner();
+    let _ = pool.create_item(&new_item)?;
+
+    Ok(HttpResponse::Created().finish())
+}
+
+// Update other handler functions for read_items, update_item, and delete_item
+// ...
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mockall::predicate::*;
+    use mockall::*;
+
+    // Create a mock struct implementing the DbOps trait
+    mock! {
+        pub MockDbOps {}
+
+        impl DbOps for MockDbOps {
+            fn create_item(&self, item: &TodoItem) -> Result<usize, TodoApiError>;
+            // Add other mocked functions for read_items, update_item, and delete_item
+        }
+    }
+
+    #[actix_rt::test]
+    async fn test_create_item() {
+        let item = TodoItem {
+            id: 0,
+            title: "Test item".to_string(),
+            description: "Test description".to_string(),
+            completed: false,
+        };
+
+        // Set up the mock database
+        let mut mock_db = MockDbOps::new();
+        mock_db
+            .expect_create_item()
+            .with(eq(item.clone()))
+            .times(1)
+            .returning(move |item| Ok(1));
+
+        let pool = web::Data::new(mock_db);
+
+        let request = test::TestRequest::post()
+            .uri("/create")
+            .set_json(&item);
+
+        let response = create_item(request.to_json().unwrap(), pool).await;
+        assert_eq!(response.unwrap().status(), StatusCode::CREATED);
+    }
+
+    // Add tests for read_items, update_item, and delete_item here
+}
+```
+
+This will allow you to write unit tests that focus solely on the handler functions' logic and mock the database interactions. Make sure to update your main application to use the `DbOps` trait when initializing the route handlers.
+
+## Jon Anders
+> I started by implementing the trait for the `create_item` function only, but I got these errors:  
+> error[E0308]: mismatched types  
+>   --> src\handlers.rs:15:9  
+>    |  
+> 13 |     fn create_item(&self, item: &TodoItem) -> Result<usize, TodoApiError> {  
+>    |                                               --------------------------- expected `Result<usize, TodoApiError>` because of return type  
+> 14 |         let mut connection = self.get().map_err(TodoApiError::from)?;  
+> 15 |         db::create_item(&mut connection, &item)  
+>    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<usize, TodoApiError>`, found `Result<usize, Error>`  
+>    |  
+>    = note: expected enum `Result<_, TodoApiError>`  
+>               found enum `Result<_, diesel::result::Error>`  
+> help: use `?` to coerce and return an appropriate `Err`, and wrap the resulting value in `Ok` so the expression remains of type `Result`  
+>    |  
+> 15 |         Ok(db::create_item(&mut connection, &item)?)  
+>    |         +++                                       ++  
+>   
+> error[E0282]: type annotations needed  
+>   --> src\main.rs:32:45  
+>    |  
+> 32 |             .route("/items", web::post().to(create_item))  
+>    |                                             ^^^^^^^^^^^ cannot infer type of the type parameter `D` declared on the function `create_item`  
+>    |  
+> help: consider specifying the generic argument  
+>    |  
+> 32 |             .route("/items", web::post().to(create_item::<D>))  
+>    |                                                        +++++  
+
+## ChatGPT
+My apologies for the oversight. For the first error, you need to map the Diesel error to a `TodoApiError`. You can do this by adding `?` after the call to `db::create_item`.
+
+For the second error, the type parameter `D` cannot be inferred because the compiler doesn't have enough information about the type being passed. To fix this, you can either specify the type parameter explicitly or use the `App::data_factory` method, which will automatically infer the type of the data being passed.
+
+Here's how to fix the errors:
+
+1. In `src/handlers.rs`, update the `create_item` implementation for `DbOps`:
+
+```rust
+impl DbOps for db::Pool {
+    fn create_item(&self, item: &TodoItem) -> Result<usize, TodoApiError> {
+        let mut connection = self.get().map_err(TodoApiError::from)?;
+        Ok(db::create_item(&mut connection, &item)?)
+    }
+    // Implement other functions for read_items, update_item, and delete_item
+}
+```
+
+2. In `src/main.rs`, update the route registration using `data_factory`:
+
+```rust
+pub fn main() -> io::Result<()> {
+    // ...
+
+    HttpServer::new(move || {
+        App::new()
+            .data_factory(|| web::Data::new(db::create_pool()))
+            .route("/items", web::post().to(create_item))
+            // Other routes
+    })
+    .bind("127.0.0.1:8080")?
+    .run()
+    .await
+}
+```
+
+This should resolve the errors you encountered.
+
+## Jon Anders
+> The first fix works, but the second does not. Here is the current state of `src/main.rs`, before making any changes:  
+> mod models;  
+> mod handlers;  
+> mod error;  
+> mod db;  
+> mod schema;  
+>   
+> use actix_web::{web, App, HttpResponse, HttpServer, Responder};  
+> use actix_web::middleware::Logger;  
+> use crate::db::init_pool;  
+> use crate::handlers::{create_item, delete_item, read_items, update_item};  
+>   
+>   
+> // Initialize logger  
+> fn init_logger() {  
+>     env_logger::Builder::new()  
+>         .filter(None, log::LevelFilter::Info)  
+>         .init();  
+> }  
+>   
+> #[actix_web::main]  
+> async fn main() -> std::io::Result<()> {  
+>     init_logger();  
+>   
+>     let database_url = dotenv::var("DATABASE_URL").expect("DATABASE_URL must be set");  
+>     let todo_items = web::Data::new(init_pool(&database_url));  
+>   
+>     HttpServer::new(move || {  
+>         App::new()  
+>             .wrap(Logger::default())  
+>             .app_data(todo_items.clone())  
+>             .route("/", web::get().to(index))  
+>             .route("/items", web::post().to(create_item))  
+>             .route("/items", web::get().to(read_items))  
+>             .route("/items/{item_id}", web::put().to(update_item))  
+>             .route("/items/{item_id}", web::delete().to(delete_item))  
+>     })  
+>     .bind("127.0.0.1:8080")?  
+>     .run()  
+>     .await  
+> }  
+>   
+> async fn index() -> impl Responder {  
+>     HttpResponse::Ok().body("Hello, Rusticate!")  
+> }  
+
+## ChatGPT
+I apologize for the confusion. You can use the `data` method instead of `app_data` in `src/main.rs` to register the data factory. Here's how you can update the route registration:
+
+1. In `src/main.rs`, update the route registration using `data`:
+
+```rust
+#[actix_web::main]
+async fn main() -> std::io::Result<()> {
+    init_logger();
+
+    let database_url = dotenv::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let todo_items = init_pool(&database_url);
+
+    HttpServer::new(move || {
+        App::new()
+            .wrap(Logger::default())
+            .data(web::Data::new(todo_items.clone()))
+            .route("/", web::get().to(index))
+            .route("/items", web::post().to(create_item))
+            .route("/items", web::get().to(read_items))
+            .route("/items/{item_id}", web::put().to(update_item))
+            .route("/items/{item_id}", web::delete().to(delete_item))
+    })
+    .bind("127.0.0.1:8080")?
+    .run()
+    .await
+}
+```
+
+The `data` method should be used when you want to provide a shared value of a specific type for all handlers. The `data_factory` method should be used when you want to create a new instance of the data for each worker thread.
+
+Using the `data` method should resolve the type inference issue, and you should be able to run your tests and application successfully.
+
+## Jon Anders
+> Now I'm getting these errors instead:  
+> warning: use of deprecated method `actix_web::App::<T>::data`: Use `.app_data(Data::new(val))` instead.  
+>   --> src\main.rs:30:14  
+>    |  
+> 30 |             .data(web::Data::new(todo_items.clone()))  
+>    |              ^^^^  
+>    |  
+>    = note: `#[warn(deprecated)]` on by default  
+>   
+> error[E0282]: type annotations needed  
+>   --> src\main.rs:32:45  
+>    |  
+> 32 |             .route("/items", web::post().to(create_item))  
+>    |                                             ^^^^^^^^^^^ cannot infer type of the type parameter `D` declared on the function `create_item`  
+>    |  
+> help: consider specifying the generic argument  
+>    |  
+> 32 |             .route("/items", web::post().to(create_item::<D>))  
+>    |                                                        +++++  
+
+## ChatGPT
+I apologize for the confusion. Let's revert back to using `.app_data(web::Data::new(todo_items.clone()))` as we had earlier, and update the `create_item` function definition to include a specific type for the `ConnectionManager` in the `Pool`.
+
+In `src/handlers.rs`, change the `create_item` function to:
+
+```rust
+use diesel::r2d2::ConnectionManager;
+use diesel::PgConnection;
+
+pub async fn create_item(
+    item: web::Json<TodoItem>,
+    pool: web::Data<db::Pool<ConnectionManager<PgConnection>>>,
+) -> Result<impl Responder, TodoApiError> {
+    let mut connection = pool.get().map_err(TodoApiError::from)?;
+
+    let new_item = item.into_inner();
+    let _ = db::create_item(&mut connection, &new_item)?;
+
+    Ok(HttpResponse::Created().finish())
+}
+```
+
+This change specifies the type of `ConnectionManager` for the `Pool`, which should resolve the type inference issue.
+
+## Jon Anders
+> I had to make some adjustments, but I got it to work. This is the current state of `src/handlers.rs`:  
+> use crate::error::TodoApiError;  
+> use crate::models::TodoItem;  
+> use crate::db;  
+> use actix_web::{web, HttpResponse, Responder};  
+> use diesel::result::Error as DieselError;  
+>   
+> pub trait DbOps {  
+>     fn create_item(&self, item: &TodoItem) -> Result<usize, TodoApiError>;  
+>     // Add other function signatures for read_items, update_item, and delete_item  
+> }  
+>   
+> impl DbOps for db::Pool {  
+>     fn create_item(&self, item: &TodoItem) -> Result<usize, TodoApiError> {  
+>         let mut connection = self.get().map_err(TodoApiError::from)?;  
+>         Ok(db::create_item(&mut connection, &item)?)  
+>     }  
+>     // Implement other functions for read_items, update_item, and delete_item  
+> }  
+>   
+> // Create a new to-do item and add it to the database  
+> pub async fn create_item(  
+>     item: web::Json<TodoItem>,  
+>     pool: web::Data<db::Pool>,  
+> ) -> Result<impl Responder, TodoApiError> {  
+>     let new_item = item.into_inner();  
+>     let _ = pool.create_item(&new_item)?;  
+>   
+>     Ok(HttpResponse::Created().finish())  
+> }  
+>   
+> // Retrieve all to-do items from the database  
+> pub async fn read_items(pool: web::Data<db::Pool>) -> Result<HttpResponse, TodoApiError> {  
+>     let mut connection = pool.get().map_err(TodoApiError::from)?;  
+>     let items = db::read_items(&mut connection)?;  
+>   
+>     Ok(HttpResponse::Ok().json(items))  
+> }  
+>   
+> // Update an existing to-do item in the database by its ID  
+> pub async fn update_item(  
+>     item_id: web::Path<i32>,  
+>     item: web::Json<TodoItem>,  
+>     pool: web::Data<db::Pool>,  
+> ) -> Result<impl Responder, TodoApiError> {  
+>     let mut connection = pool.get().map_err(TodoApiError::from)?;  
+>     let updated_item = item.into_inner();  
+>   
+>     match db::update_item(&mut connection, *item_id, &updated_item) {  
+>         Ok(_) => Ok(HttpResponse::Ok().finish()),  
+>         Err(DieselError::NotFound) => Ok(HttpResponse::NotFound().finish()),  
+>         Err(_) => Err(TodoApiError::from("Internal server error")),  
+>     }  
+> }  
+>   
+> // Delete a to-do item from the database by its ID  
+> pub async fn delete_item(  
+>     item_id: web::Path<i32>,  
+>     pool: web::Data<db::Pool>,  
+> ) -> Result<impl Responder, TodoApiError> {  
+>     let mut connection = pool.get().map_err(TodoApiError::from)?;  
+>   
+>     match db::delete_item(&mut connection, *item_id) {  
+>         Ok(_) => Ok(HttpResponse::NoContent().finish()),  
+>         Err(DieselError::NotFound) => Ok(HttpResponse::NotFound().finish()),  
+>         Err(_) => Err(TodoApiError::from("Internal server error")),  
+>     }  
+> }  
+>   
+> Now let's get back to the unit test. You had a suggestion earlier that looked more like an integration test. Please write a unit test for `create_item` that will mock the database interaction.  
+
+## ChatGPT
+To mock the database interaction and write a unit test for the `create_item` function, you can use the `Mock` trait from the `mockall` crate. First, add the `mockall` crate to your `Cargo.toml` under `[dev-dependencies]`:
+
+```toml
+[dev-dependencies]
+mockall = "0.10"
+```
+
+Then, in `src/handlers.rs`, add the following code to create a mock object for the `DbOps` trait:
+
+```rust
+#[cfg(test)]
+use mockall::{automock, predicate::*};
+
+#[cfg_attr(test, automock)]
+pub trait DbOps {
+    fn create_item(&self, item: &TodoItem) -> Result<usize, TodoApiError>;
+    // Add other function signatures for read_items, update_item, and delete_item
+}
+```
+
+Finally, you can write a unit test for the `create_item` function in `handlers.rs`. Add the following code at the end of the file:
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use actix_web::{test, web, App, Error};
+    use mockall::predicate;
+
+    #[actix_rt::test]
+    async fn test_create_item() -> Result<(), Error> {
+        let todo_item = TodoItem {
+            id: None,
+            title: String::from("Test Item"),
+            checked: false,
+        };
+
+        let mut mock_pool = MockDbOps::new();
+        mock_pool
+            .expect_create_item()
+            .with(predicate::eq(todo_item.clone()))
+            .return_once(|_| Ok(1));
+
+        let app = App::new()
+            .app_data(web::Data::new(mock_pool))
+            .service(web::resource("/items").route(web::post().to(create_item)));
+
+        let mut app = test::init_service(app).await;
+
+        let req = test::TestRequest::post()
+            .uri("/items")
+            .set_json(&todo_item)
+            .to_request();
+
+        let resp = test::call_service(&mut app, req).await;
+        assert_eq!(resp.status(), 201);
+
+        Ok(())
+    }
+}
+```
+
+This test case mocks the `DbOps` trait and creates an instance of `MockDbOps`. The `expect_create_item` function sets the expected behavior for the `create_item` function when it receives an input that matches the specified predicate.
+
+The test case then initializes the application with the mocked `DbOps`, makes a POST request to the `/items` endpoint with the JSON payload, and checks if the response has a 201 status code, which means the item was successfully created.
+
+## Jon Anders
+> Since this code is using `actix_web::test`, this is still an integration test and not a unit test. A unit test should only call the function being tested and assert the return value.
+
+## ChatGPT
+I apologize for the confusion. You are correct that the previous example is more of an integration test than a unit test. To write a unit test for the `create_item` function, you can call it directly and use the mocked `DbOps` to verify the behavior. Here's a revised test:
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use actix_web::http::StatusCode;
+
+    #[actix_rt::test]
+    async fn test_create_item() {
+        let todo_item = TodoItem {
+            id: None,
+            title: String::from("Test Item"),
+            checked: false,
+        };
+
+        let mut mock_pool = MockDbOps::new();
+        mock_pool
+            .expect_create_item()
+            .with(predicate::eq(todo_item.clone()))
+            .return_once(|_| Ok(1));
+
+        let pool = web::Data::new(mock_pool);
+        let item = web::Json(todo_item.clone());
+
+        let result = create_item(item, pool).await;
+
+        match result {
+            Ok(responder) => {
+                assert_eq!(responder.status(), StatusCode::CREATED);
+            }
+            Err(err) => {
+                panic!("Unexpected error: {:?}", err);
+            }
+        }
+    }
+}
+```
+
+This unit test creates a mocked `DbOps` and sets the expected behavior for the `create_item` function. It then calls the `create_item` function directly with the test data and checks if the response has a 201 status code, which means the item was successfully created.
+
+## Jon Anders
+> I'm getting these errors from `cargo test`:  
+> error[E0308]: mismatched types  
+>   --> src\handlers.rs:99:40  
+>    |  
+> 99 |         let result = create_item(item, pool).await;  
+>    |                      -----------       ^^^^ expected `Data<Pool<...>>`, found `Data<MockDbOps>`  
+>    |                      |  
+>    |                      arguments to this function are incorrect  
+>    |  
+>    = note: expected struct `Data<diesel::r2d2::Pool<ConnectionManager<diesel::SqliteConnection>>>`  
+>               found struct `Data<MockDbOps>`  
+> note: function defined here  
+>   --> src\handlers.rs:21:14  
+>    |  
+> 21 | pub async fn create_item(  
+>    |              ^^^^^^^^^^^  
+> 22 |     item: web::Json<TodoItem>,  
+> 23 |     pool: web::Data<db::Pool>,  
+>    |     -------------------------  
+>   
+> error[E0599]: no method named `status` found for opaque type `impl Responder` in the current scope  
+>    --> src\handlers.rs:103:38  
+>     |  
+> 103 |                 assert_eq!(responder.status(), StatusCode::CREATED);  
+>     |                                      ^^^^^^ method not found in `impl Responder`  
+
+## ChatGPT
+I apologize for the oversight. To fix the errors, you can update the test as follows:
+
+1. Change the `create_item` function definition in `handlers.rs` to accept a `DbOps` trait object instead of the `db::Pool`:
+
+```rust
+pub async fn create_item<D: DbOps + 'static>(
+    item: web::Json<TodoItem>,
+    pool: web::Data<D>,
+) -> Result<impl Responder, TodoApiError> {
+    // ...
+}
+```
+
+2. Update the `main.rs` file to pass the `db::Pool` explicitly:
+
+```rust
+.route("/items", web::post().to(create_item::<db::Pool>))
+```
+
+3. Change the test in `handlers.rs` to use the `HttpResponse` type instead of `impl Responder`:
+
+```rust
+match result {
+    Ok(response) => {
+        let response = response.into_inner();
+        assert_eq!(response.status(), StatusCode::CREATED);
+    }
+    Err(err) => {
+        panic!("Unexpected error: {:?}", err);
+    }
+}
+```
+
+With these changes, the test should compile and run successfully.
+
+## Jon Anders
+> Step 1 and 2 worked well, but step 3 did not. I'm now getting this error from `cargo test`:  
+> error[E0599]: no method named `into_inner` found for opaque type `impl Responder` in the current scope  
+>    --> src\handlers.rs:122:41  
+>     |  
+> 122 |                 let response = response.into_inner();  
+>     |                                         ^^^^^^^^^^ method not found in `impl Responder`  
+
+## ChatGPT
+I apologize for the confusion. You can try a different approach to extract the `HttpResponse` from the `impl Responder`. You can change the test in `handlers.rs` to use the `await_response()` function from `actix_web::test`, which will handle the conversion for you:
+
+```rust
+use actix_web::test::await_response;
+// ...
+
+#[actix_rt::test]
+async fn test_create_item() {
+    let pool = web::Data::new(MockDbOps {});
+    let todo_item = TodoItem {
+        id: None,
+        title: String::from("Test item"),
+        description: Some(String::from("Test description")),
+        done: false,
+    };
+
+    let item = web::Json(todo_item);
+    let result = create_item::<MockDbOps>(item, pool).await;
+
+    match result {
+        Ok(responder) => {
+            let response = await_response(responder).await;
+            assert_eq!(response.status(), StatusCode::CREATED);
+        }
+        Err(err) => {
+            panic!("Unexpected error: {:?}", err);
+        }
+    }
+}
+```
+
+This should work correctly and allow the test to compile and run successfully.
+
+## Jon Anders
+> error[E0432]: unresolved import `actix_web::test::await_response`  
+>   --> src\handlers.rs:73:9  
+>    |  
+> 73 |     use actix_web::test::await_response;  
+>    |         ^^^^^^^^^^^^^^^^^--------------  
+>    |         |                |  
+>    |         |                help: a similar name exists in the module: `read_response`  
+>    |         no `await_response` in `test`  
+
+## ChatGPT
+Apologies for the confusion. The correct function to import is `read_response` instead of `await_response`. Please replace the import statement and function call as follows:
+
+```rust
+use actix_web::test::read_response;
+// ...
+
+#[actix_rt::test]
+async fn test_create_item() {
+    let pool = web::Data::new(MockDbOps {});
+    let todo_item = TodoItem {
+        id: None,
+        title: String::from("Test item"),
+        description: Some(String::from("Test description")),
+        done: false,
+    };
+
+    let item = web::Json(todo_item);
+    let result = create_item::<MockDbOps>(item, pool).await;
+
+    match result {
+        Ok(responder) => {
+            let response = read_response(&responder).await;
+            assert_eq!(response.status(), StatusCode::CREATED);
+        }
+        Err(err) => {
+            panic!("Unexpected error: {:?}", err);
+        }
+    }
+}
+```
+
+Now your test should compile and run successfully.
+
+## Jon Anders
+> Now I'm getting a long list of errors and warnings:  
+> warning: use of deprecated function `actix_web::test::read_response`: Renamed to `call_and_read_body`.  
+>   --> src\handlers.rs:73:26  
+>    |  
+> 73 |     use actix_web::test::read_response;  
+>    |                          ^^^^^^^^^^^^^  
+>    |  
+>    = note: `#[warn(deprecated)]` on by default  
+>   
+> warning: use of deprecated function `actix_web::test::read_response`: Renamed to `call_and_read_body`.  
+>    --> src\handlers.rs:132:32  
+>     |  
+> 132 |                 let response = read_response(&responder).await;  
+>     |                                ^^^^^^^^^^^^^  
+>   
+> error[E0277]: the trait bound `impl Responder: actix_web::dev::Service<actix_http::requests::request::Request>` is not satisfied  
+>    --> src\handlers.rs:132:46  
+>     |  
+> 132 |                 let response = read_response(&responder).await;  
+>     |                                ------------- ^^^^^^^^^^ the trait `actix_web::dev::Service<actix_http::requests::request::Request>` is not implemented for `impl Responder`  
+>     |                                |  
+>     |                                required by a bound introduced by this call  
+>     |  
+>     = help: the following other types implement trait `actix_web::dev::Service<Req>`:  
+>               <&'a S as actix_web::dev::Service<Req>>  
+>               <&'a mut S as actix_web::dev::Service<Req>>  
+>               <Box<S\> as actix_web::dev::Service<Req>>  
+>               <Rc<S\> as actix_web::dev::Service<Req>>  
+>               <RefCell<S\> as actix_web::dev::Service<Req>>  
+>               <actix_http::h1::expect::ExpectHandler as actix_web::dev::Service<actix_http::requests::request::Request>>  
+>               <actix_http::h1::upgrade::UpgradeHandler as actix_web::dev::Service<(actix_http::requests::request::Request, actix_codec::framed::Framed<T, actix_http::h1::codec::Codec>)>>  
+>               <actix_http::h2::service::H2ServiceHandler<T, S, B> as actix_web::dev::Service<(T, std::option::Option<SocketAddr>)>>  
+>             and 20 others  
+> note: required by a bound in `read_response`  
+>    --> C:\Users\amu\.cargo\registry\src\github.com-1ecc6299db9ec823\actix-web-4.3.1\src\test\test_utils.rs:156:8  
+>     |  
+> 156 |     S: Service<Request, Response = ServiceResponse<B>, Error = Error>,  
+>     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `read_response`  
+>   
+> error[E0061]: this function takes 2 arguments but 1 argument was supplied  
+>    --> src\handlers.rs:132:32  
+>     |  
+> 132 |                 let response = read_response(&responder).await;  
+>     |                                ^^^^^^^^^^^^^------------ an argument of type `actix_http::requests::request::Request` is missing  
+>     |  
+> note: function defined here  
+>    --> C:\Users\amu\.cargo\registry\src\github.com-1ecc6299db9ec823\actix-web-4.3.1\src\test\test_utils.rs:154:14  
+>     |  
+> 154 | pub async fn read_response<S, B>(app: &S, req: Request) -> Bytes  
+>     |              ^^^^^^^^^^^^^  
+> help: provide the argument  
+>     |  
+> 132 |                 let response = read_response(&responder, /* actix_http::requests::request::Request */).await;  
+>     |                                             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~  
+>   
+> error[E0599]: no method named `status` found for struct `actix_web::web::Bytes` in the current scope  
+>    --> src\handlers.rs:133:37  
+>     |  
+> 133 |                 assert_eq!(response.status(), StatusCode::CREATED);  
+>     |                                     ^^^^^^ method not found in `Bytes`  
+
+## ChatGPT
+I apologize for the confusion. Since `read_response` is deprecated, you should use the `call_and_read_body` function instead. However, this function requires a `Service` and a `Request`, not a `Responder`. To fix this issue, you can create a mock service that wraps the handler function and passes the `Request` to it.
+
+Here's an example of how to refactor the test:
+
+```rust
+use actix_web::{dev::Service, http::StatusCode, test::{call_and_read_body, TestRequest}};
+// ...
+
+#[actix_rt::test]
+async fn test_create_item() {
+    let pool = web::Data::new(MockDbOps {});
+    let todo_item = TodoItem {
+        id: None,
+        title: String::from("Test item"),
+        description: Some(String::from("Test description")),
+        done: false,
+    };
+
+    let item = web::Json(todo_item);
+    let create_item_service = |req: ServiceRequest| create_item::<MockDbOps>(item.clone(), pool.clone()).boxed_local();
+    let app = TestRequest::with_uri("/items").app_data(pool.clone()).to_http_request();
+    let response = call_and_read_body(create_item_service, app).await;
+    
+    assert_eq!(response.status(), StatusCode::CREATED);
+}
+```
+
+This test will create a mock service that wraps the `create_item` handler function and passes the `Request` to it. Then, it uses `call_and_read_body` to call the service and get the response. Finally, it asserts that the response status is `StatusCode::CREATED`.
+
+## Jon Anders
+> I tried, but I can't get this to work either. It seems unit testing of `src/handlers.rs` is more difficult than I thought. I will skip this for now and cover this by integration tests later. For now I will revert the content of this file to how it was before we tried to implement unit tests in it.
+
+## ChatGPT
+I apologize for the difficulties you faced while trying to write a unit test for the `create_item` handler. You can revert the content of `src/handlers.rs` back to the original implementation without the test code. In the future, if you need help with testing or other aspects of your Rust project, feel free to ask. Good luck with your project!
